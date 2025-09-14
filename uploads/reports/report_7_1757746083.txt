@@ -1,0 +1,22 @@
+LAB REPORT
+==========
+
+Patient ID: 7
+Patient Name: haram 
+Test Name: LFT (Liver Function Test)
+Date: 2025-09-13 08:48:03
+Lab Technician: admin
+
+Test Results:
+=============
+Bilirubin Total: _____ mg/dL (Normal: 0.3-1.2 mg/dL)
+Bilirubin Direct: _____ mg/dL (Normal: 0.0-0.3 mg/dL)
+ALT (SGPT): _____ U/L (Normal: 7-56 U/L)
+AST (SGOT): _____ U/L (Normal: 10-40 U/L)
+ALP: _____ U/L (Normal: 44-147 U/L)
+Albumin: _____ g/dL (Normal: 3.5-5.0 g/dL)
+
+Remarks: 
+
+
+End of Report

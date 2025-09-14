@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Lab Report - Shahmir Laboratory</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 0; 
+            padding: 15px;
+            font-size: 11px;
+        }
+        .shahmir-header {
+            background: linear-gradient(135deg, #dc2626 0%, #dc2626 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 8px 8px 0 0;
+            margin-bottom: 20px;
+        }
+        .shahmir-logo {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        .logo-circle {
+            width: 60px;
+            height: 60px;
+            border: 3px solid white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255,255,255,0.1);
+            font-size: 24px;
+        }
+        .report-table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 20px 0;
+            font-size: 10px;
+        }
+        .report-table th,
+        .report-table td {
+            border: 1px solid #333;
+            padding: 4px 6px;
+            text-align: left;
+            vertical-align: top;
+        }
+        .report-table th {
+            background-color: #f5f5f5;
+            font-weight: bold;
+            text-align: center;
+            font-size: 9px;
+        }
+        .category-header {
+            background-color: #e5e5e5 !important;
+            font-weight: bold;
+            text-align: center;
+            color: #dc2626;
+            font-size: 10px;
+        }
+        .hospital-footer {
+            background: linear-gradient(135deg, #dc2626 0%, #dc2626 100%);
+            color: white;
+            padding: 8px;
+            text-align: center;
+            border-radius: 0 0 8px 8px;
+            font-size: 9px;
+            margin-top: 15px;
+        }
+        .patient-info-row {
+            margin: 10px 0;
+            font-size: 11px;
+        }
+        h2 { color: #dc2626; font-size: 18px; margin: 20px 0; }
+        @media print {
+            body { margin: 0; padding: 10px; }
+        }
+        .result-value {
+            font-weight: bold;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <div class="shahmir-header">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div class="shahmir-logo">
+                <div class="logo-circle">🔬</div>
+                <div>
+                    <h1 style="font-size: 24px; font-weight: bold; margin: 0;">Shahmir Laboratory</h1>
+                    <p style="font-size: 12px; opacity: 0.9; margin: 0;">Facility Available for Multi Lab Collection</p>
+                </div>
+            </div>
+            <div style="text-align: right; font-size: 12px;">
+                <p><strong>Timings</strong></p>
+                <p>Monday-Sunday: Open Round The Clock</p>
+            </div>
+        </div>
+        <div class="patient-info-row">
+            Name: Fatima Zahra &nbsp;&nbsp;&nbsp; Age: 60 &nbsp;&nbsp;&nbsp; Sex: Female &nbsp;&nbsp;&nbsp; Date: 13/09/2025
+        </div>
+        <div style="font-size: 11px;">
+            Referred By: .........................................................................................................................................
+        </div>
+    </div>
+    
+    <h2>HAEMATOLOGY REPORT</h2><table class="report-table">
+                <thead><tr>
+                    <th style="width: 30%">TEST</th>
+                    <th style="width: 25%">RESULT</th>
+                    <th style="width: 15%">UNIT</th>
+                    <th style="width: 30%">REFERENCE RANGE</th>
+                </tr></thead><tbody><tr class="category-header"><td colspan="4"><strong>HAEMATOLOGY REPORT</strong></td></tr><tr>
+                        <td>R.B.C Count</td>
+                        <td class="result-value">4564</td>
+                        <td style="text-align: center;">Million/Cmm</td>
+                        <td style="font-size: 9px;">4.25-5.9</td></tr><tr class="category-header"><td colspan="4"><strong>Different Leukocyte Count (DLC)</strong></td></tr><tr class="category-header"><td colspan="4"><strong>ESR</strong></td></tr><tr class="category-header"><td colspan="4"><strong>RBC MORPHOLOGY</strong></td></tr></tbody></table><div style="margin-top: 30px;">
+        <p><strong>Technician:</strong> admin</p>
+        <p><strong>Remarks:</strong> </p>
+        <p><strong>Date & Time:</strong> 13/09/2025 at 01:31 PM</p>
+    </div>
+    
+    <div style="font-size: 10px; color: #dc2626; margin: 20px 0;">
+        <strong>Not for Medico legal / Court use</strong><br>
+        <strong>Please Call For Free Repeat Blood Test Within 24 Hours.</strong>
+    </div>
+    
+    <div class="hospital-footer">
+        <p style="font-weight: bold;">LIFE CARE HOSPITAL Maternity Home & Pain Clinic Naseem Town Opposite Utman Marriage Hall Haripur</p>
+        <p style="font-size: 8px;">Contact: 0332-2400010, 0346-5888603, Phone: 0995-321234</p>
+    </div>
+</body>
+</html>
