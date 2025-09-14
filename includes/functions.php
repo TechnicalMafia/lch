@@ -516,4 +516,216 @@ function toggleCustomServiceStatus($id) {
               WHERE id = $id";
     return $conn->query($query);
 }
+
+
+// Add these new functions to your existing functions.php file----------------
+
+/**
+ * Check if username already exists in the database
+ * @param string $username The username to check
+ * @param int $exclude_id Optional user ID to exclude from check (for updates)
+ * @return bool True if username exists, false otherwise
+ */
+function isUsernameExists($username, $exclude_id = null) {
+    global $conn;
+    
+    $username = mysqli_real_escape_string($conn, $username);
+    $query = "SELECT id FROM users WHERE username = '$username'";
+    
+    // If excluding a specific user ID (for updates)
+    if ($exclude_id !== null) {
+        $query .= " AND id != " . intval($exclude_id);
+    }
+    
+    $result = $conn->query($query);
+    return $result->num_rows > 0;
+}
+
+/**
+ * Validate username - checks for duplicates and format
+ * @param string $username The username to validate
+ * @param int $exclude_id Optional user ID to exclude from check (for updates)
+ * @return array Array with 'valid' (bool) and 'message' (string)
+ */
+function validateUsername($username, $exclude_id = null) {
+    // Check if username is empty
+    if (empty(trim($username))) {
+        return ['valid' => false, 'message' => 'Username cannot be empty'];
+    }
+    
+    // Check minimum length
+    if (strlen($username) < 3) {
+        return ['valid' => false, 'message' => 'Username must be at least 3 characters long'];
+    }
+    
+    // Check maximum length
+    if (strlen($username) > 50) {
+        return ['valid' => false, 'message' => 'Username cannot be longer than 50 characters'];
+    }
+    
+    // Check for valid characters (alphanumeric, underscore, hyphen only)
+    if (!preg_match('/^[a-zA-Z0-9_-]+$/', $username)) {
+        return ['valid' => false, 'message' => 'Username can only contain letters, numbers, underscore, and hyphen'];
+    }
+    
+    // Check if username already exists
+    if (isUsernameExists($username, $exclude_id)) {
+        return ['valid' => false, 'message' => 'Username already exists. Please choose a different username'];
+    }
+    
+    return ['valid' => true, 'message' => 'Username is valid'];
+}
+
+/**
+ * Safe user creation with validation
+ * @param string $username
+ * @param string $password
+ * @param string $role
+ * @param int $staff_id
+ * @return array Result array with 'success' (bool) and 'message' (string)
+ */
+function createUser($username, $password, $role, $staff_id = null) {
+    global $conn;
+    
+    // Validate username
+    $validation = validateUsername($username);
+    if (!$validation['valid']) {
+        return ['success' => false, 'message' => $validation['message']];
+    }
+    
+    // Validate password
+    if (empty(trim($password))) {
+        return ['success' => false, 'message' => 'Password cannot be empty'];
+    }
+    
+    if (strlen($password) < 6) {
+        return ['success' => false, 'message' => 'Password must be at least 6 characters long'];
+    }
+    
+    // Validate role
+    $valid_roles = ['admin', 'reception', 'doctor', 'lab'];
+    if (!in_array($role, $valid_roles)) {
+        return ['success' => false, 'message' => 'Invalid role selected'];
+    }
+    
+    // Sanitize inputs
+    $username = mysqli_real_escape_string($conn, $username);
+    $password = mysqli_real_escape_string($conn, $password);
+    $role = mysqli_real_escape_string($conn, $role);
+    
+    // Prepare query
+    $query = "INSERT INTO users (username, password, role, staff_id) VALUES ('$username', '$password', '$role', " . 
+             ($staff_id ? "'" . intval($staff_id) . "'" : "NULL") . ")";
+    
+    if ($conn->query($query) === TRUE) {
+        return ['success' => true, 'message' => 'User created successfully'];
+    } else {
+        return ['success' => false, 'message' => 'Error creating user: ' . $conn->error];
+    }
+}
+
+/**
+ * Safe user update with validation
+ * @param int $user_id
+ * @param string $username
+ * @param string $password
+ * @param string $role
+ * @param int $staff_id
+ * @return array Result array with 'success' (bool) and 'message' (string)
+ */
+function updateUser($user_id, $username, $password, $role, $staff_id = null) {
+    global $conn;
+    
+    // Validate user ID
+    $user_id = intval($user_id);
+    if ($user_id <= 0) {
+        return ['success' => false, 'message' => 'Invalid user ID'];
+    }
+    
+    // Validate username (excluding current user)
+    $validation = validateUsername($username, $user_id);
+    if (!$validation['valid']) {
+        return ['success' => false, 'message' => $validation['message']];
+    }
+    
+    // Validate password
+    if (empty(trim($password))) {
+        return ['success' => false, 'message' => 'Password cannot be empty'];
+    }
+    
+    if (strlen($password) < 6) {
+        return ['success' => false, 'message' => 'Password must be at least 6 characters long'];
+    }
+    
+    // Validate role
+    $valid_roles = ['admin', 'reception', 'doctor', 'lab'];
+    if (!in_array($role, $valid_roles)) {
+        return ['success' => false, 'message' => 'Invalid role selected'];
+    }
+    
+    // Sanitize inputs
+    $username = mysqli_real_escape_string($conn, $username);
+    $password = mysqli_real_escape_string($conn, $password);
+    $role = mysqli_real_escape_string($conn, $role);
+    
+    // Prepare query
+    $query = "UPDATE users SET username = '$username', password = '$password', role = '$role', staff_id = " .
+             ($staff_id ? "'" . intval($staff_id) . "'" : "NULL") . " WHERE id = $user_id";
+    
+    if ($conn->query($query) === TRUE) {
+        return ['success' => true, 'message' => 'User updated successfully'];
+    } else {
+        return ['success' => false, 'message' => 'Error updating user: ' . $conn->error];
+    }
+}
+
+/**
+ * Check if NIC already exists (for patient/staff registration)
+ * @param string $nic
+ * @param string $table Table name ('patients' or 'staff')
+ * @param int $exclude_id Optional ID to exclude from check
+ * @return bool
+ */
+function isNICExists($nic, $table, $exclude_id = null) {
+    global $conn;
+    
+    if (empty(trim($nic))) {
+        return false; // Empty NIC is allowed
+    }
+    
+    $nic = mysqli_real_escape_string($conn, $nic);
+    $query = "SELECT id FROM $table WHERE nic = '$nic'";
+    
+    if ($exclude_id !== null) {
+        $query .= " AND id != " . intval($exclude_id);
+    }
+    
+    $result = $conn->query($query);
+    return $result->num_rows > 0;
+}
+
+/**
+ * Check if contact number already exists
+ * @param string $contact
+ * @param string $table Table name ('patients' or 'staff')
+ * @param int $exclude_id Optional ID to exclude from check
+ * @return bool
+ */
+function isContactExists($contact, $table, $exclude_id = null) {
+    global $conn;
+    
+    $contact = mysqli_real_escape_string($conn, $contact);
+    $query = "SELECT id FROM $table WHERE contact = '$contact' OR phone = '$contact'";
+    
+    if ($exclude_id !== null) {
+        $query .= " AND id != " . intval($exclude_id);
+    }
+    
+    $result = $conn->query($query);
+    return $result->num_rows > 0;
+}
+
+// Add these functions to the end of your existing functions.php file
+
+
 ?>
