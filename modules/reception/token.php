@@ -228,7 +228,7 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                         <?php echo $success; ?>
                     </div>
                     <?php if (isset($print_token_data)): ?>
-                        <button onclick="printToken('<?php echo $print_token_data['token_no']; ?>', '<?php echo $print_token_data['patient_id']; ?>', '<?php echo $print_token_data['patient_name']; ?>', '<?php echo $print_token_data['token_type']; ?>', '<?php echo $print_token_data['assigned_to']; ?>')" 
+                        <button onclick="printToken('<?php echo $print_token_data['token_no']; ?>', '<?php echo $print_token_data['patient_id']; ?>', '<?php echo $print_token_data['patient_name']; ?>', '<?php echo $print_token_data['token_type']; ?>', '<?php echo ($print_token_data['token_type'] === 'doctor' && $print_token_data['assigned_to']) ? "Dr. " . $print_token_data['assigned_to'] : (($print_token_data['token_type'] === 'lab' && $print_token_data['assigned_to']) ? $print_token_data['assigned_to'] : 'N/A'); ?>')" 
                                 class="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700">
                             <i class="fas fa-print mr-2"></i>Print Token
                         </button>
@@ -797,31 +797,96 @@ $pending_stats = $pending_stats_result->fetch_assoc();
         </div>
     </div>
     
-    <!-- Hidden Token Template for Printing -->
+    <!-- Professional Token Template for Thermal Printing -->
     <div id="tokenTemplate" style="display: none;">
-        <div style="width: 300px; padding: 15px; font-family: monospace; font-size: 12px;">
-            <div style="text-align: center; border-bottom: 1px dashed #000; padding-bottom: 10px; margin-bottom: 15px;">
-                <h3 style="font-weight: bold; font-size: 16px; margin: 0;">HOSPITAL MANAGEMENT SYSTEM</h3>
-                <p style="font-size: 11px; margin: 2px 0;">123 Medical Street, Lahore</p>
-                <p style="font-size: 11px; margin: 2px 0;">Phone: 0300-1234567</p>
+        <div style="width: 320px; padding: 0; margin: 0; font-family: 'Courier New', monospace; font-size: 11px; line-height: 1.2; background: white;">
+            <!-- Header Section -->
+            <div style="text-align: center; padding: 8px 0; border-bottom: 2px solid #333; margin-bottom: 8px;">
+                <div style="font-size: 16px; font-weight: bold; margin: 0; text-transform: uppercase;">Hospital Management System</div>
+                <div style="font-size: 10px; margin: 2px 0; font-weight: normal;">123 Medical Street, Lahore</div>
+                <div style="font-size: 10px; margin: 2px 0; font-weight: normal;">Phone: 0300-1234567</div>
+                <div style="font-size: 10px; margin: 2px 0; font-weight: normal;">Emergency: 1122</div>
             </div>
-            <div style="margin: 15px 0;">
-                <div style="margin-bottom: 8px;"><strong>TOKEN NO:</strong> <span id="printTokenNo" style="font-size: 14px; font-weight: bold;"></span></div>
-                <div style="margin-bottom: 5px;"><strong>DATE:</strong> <span id="printDate"></span></div>
-                <div style="margin-bottom: 5px;"><strong>TIME:</strong> <span id="printTime"></span></div>
+            
+            <!-- Token Number Section -->
+            <div style="text-align: center; margin: 8px 0; padding: 6px; background: #f0f0f0; border-radius: 4px;">
+                <div style="font-size: 12px; font-weight: normal; margin: 0; color: #666;">TOKEN NUMBER</div>
+                <div id="printTokenNo" style="font-size: 20px; font-weight: bold; margin: 2px 0; color: #333; letter-spacing: 1px;"></div>
+                <div style="font-size: 10px; margin: 2px 0; color: #666;">
+                    <span id="printDate"></span> | <span id="printTime"></span>
+                </div>
             </div>
-            <div style="border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 10px 0; margin: 15px 0;">
-                <div style="margin-bottom: 5px;"><strong>TYPE:</strong> <span id="printType"></span></div>
-                <div style="margin-bottom: 5px;"><strong>ASSIGNED TO:</strong> <span id="printAssignedTo"></span></div>
+            
+            <!-- Token Type Section -->
+            <div style="margin: 10px 0; padding: 6px; border-left: 4px solid #007bff; background: #f8f9fa;">
+                <div style="font-size: 11px; font-weight: bold; margin: 0 0 2px 0; color: #333;">TOKEN TYPE</div>
+                <div id="printType" style="font-size: 13px; font-weight: bold; margin: 0; color: #007bff; text-transform: uppercase;"></div>
+                <div style="font-size: 10px; margin: 2px 0; color: #666;">ASSIGNED TO:</div>
+                <div id="printAssignedTo" style="font-size: 11px; font-weight: bold; margin: 0; color: #333;"></div>
             </div>
-            <div style="margin: 15px 0;">
-                <div style="font-weight: bold; text-decoration: underline; margin-bottom: 8px;">PATIENT DETAILS:</div>
-                <div style="margin-bottom: 5px;"><strong>ID:</strong> <span id="printPatientId"></span></div>
-                <div style="margin-bottom: 5px;"><strong>NAME:</strong> <span id="printPatientName"></span></div>
+            
+            <!-- Patient Information Section -->
+            <div style="margin: 10px 0; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                <div style="font-size: 11px; font-weight: bold; margin: 0 0 6px 0; text-align: center; text-transform: uppercase; color: #333; border-bottom: 1px solid #ddd; padding-bottom: 4px;">Patient Information</div>
+                <div style="display: flex; justify-content: space-between; margin: 3px 0;">
+                    <span style="font-weight: bold; color: #666;">ID:</span>
+                    <span id="printPatientId" style="font-weight: bold; color: #333;"></span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin: 3px 0;">
+                    <span style="font-weight: bold; color: #666;">Name:</span>
+                    <span id="printPatientName" style="font-weight: bold; color: #333; max-width: 180px; text-align: right;"></span>
+                </div>
             </div>
-            <div style="text-align: center; margin-top: 20px; border-top: 1px dashed #000; padding-top: 10px; font-size: 11px;">
-                <div style="font-weight: bold; margin-bottom: 5px;">Please wait for your turn</div>
-                <div>Thank you for visiting our hospital</div>
+            
+            <!-- Instructions Section -->
+            <div style="margin: 12px 0; padding: 8px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 4px; text-align: center;">
+                <div style="font-size: 11px; font-weight: bold; margin: 0 0 4px 0; color: #856404;">⚠️ IMPORTANT INSTRUCTIONS</div>
+                <div style="font-size: 9px; margin: 2px 0; color: #856404;">• Please wait for your turn to be called</div>
+                <div style="font-size: 9px; margin: 2px 0; color: #856404;">• Keep this token safe for verification</div>
+                <div style="font-size: 9px; margin: 2px 0; color: #856404;">• Present this token when called</div>
+            </div>
+            
+            <!-- Footer Section -->
+            <div style="text-align: center; margin-top: 12px; padding-top: 8px; border-top: 1px dashed #333; font-size: 9px; color: #666;">
+                <div style="font-weight: bold; margin: 0 0 2px 0;">Thank you for choosing our hospital</div>
+                <div style="margin: 0 0 1px 0;">We value your health and time</div>
+                <div style="font-size: 8px; margin: 4px 0 0 0; color: #999;">Generated on: <span id="generatedDateTime"></span></div>
+            </div>
+            
+            <!-- Barcode Section (Optional) -->
+            <div style="text-align: center; margin: 8px 0; padding: 4px; border: 1px solid #ddd; border-radius: 4px;">
+                <div style="font-size: 8px; color: #666; margin: 0 0 2px 0;">SCAN ME</div>
+                <div style="font-family: monospace; font-size: 8px; font-weight: bold; letter-spacing: -1px;" id="barcodeText"></div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Alternative Compact Template for Small Printers -->
+    <div id="compactTokenTemplate" style="display: none;">
+        <div style="width: 280px; padding: 0; margin: 0; font-family: 'Courier New', monospace; font-size: 10px; line-height: 1.1; background: white;">
+            <!-- Header -->
+            <div style="text-align: center; padding: 4px 0; border-bottom: 1px solid #333; margin-bottom: 4px;">
+                <div style="font-size: 12px; font-weight: bold; margin: 0;">HOSPITAL SYSTEM</div>
+                <div style="font-size: 8px; margin: 0;">123 Medical St, Lahore</div>
+            </div>
+            
+            <!-- Token Info -->
+            <div style="text-align: center; margin: 4px 0;">
+                <div style="font-size: 14px; font-weight: bold;" id="compactTokenNo"></div>
+                <div style="font-size: 8px;"><span id="compactDate"></span> <span id="compactTime"></span></div>
+            </div>
+            
+            <!-- Details -->
+            <div style="margin: 4px 0; padding: 4px; border: 1px solid #ddd;">
+                <div style="font-size: 9px; font-weight: bold; text-align: center; margin-bottom: 2px;" id="compactType"></div>
+                <div style="font-size: 8px; margin: 1px 0;"><b>Patient:</b> <span id="compactPatientName"></span></div>
+                <div style="font-size: 8px; margin: 1px 0;"><b>ID:</b> <span id="compactPatientId"></span></div>
+                <div style="font-size: 8px; margin: 1px 0;"><b>Assigned:</b> <span id="compactAssignedTo"></span></div>
+            </div>
+            
+            <!-- Footer -->
+            <div style="text-align: center; margin-top: 4px; padding-top: 4px; border-top: 1px dashed #333; font-size: 8px;">
+                Please wait for your turn
             </div>
         </div>
     </div>
@@ -935,7 +1000,7 @@ $pending_stats = $pending_stats_result->fetch_assoc();
             document.getElementById('refundModal').classList.add('hidden');
         }
         
-        // Print token function using a template
+        // Enhanced print token function with professional template
         function printToken(tokenNo, patientId, patientName, tokenType, assignedTo) {
             // Get current date and time
             const currentDate = new Date().toLocaleDateString('en-US', {
@@ -950,11 +1015,15 @@ $pending_stats = $pending_stats_result->fetch_assoc();
             });
             const tokenTypeFormatted = tokenType.charAt(0).toUpperCase() + tokenType.slice(1) + ' Token';
             
+            // Ask user which template to use
+            const useCompact = confirm('Use compact template for small thermal printers?\n\nClick OK for compact template\nClick Cancel for standard template');
+            
+            // Select template based on user choice
+            const templateId = useCompact ? 'compactTokenTemplate' : 'tokenTemplate';
+            const template = document.getElementById(templateId).innerHTML;
+            
             // Create a new window for printing
             const printWindow = window.open('', '_blank', 'width=400,height=600');
-            
-            // Get the template HTML
-            const template = document.getElementById('tokenTemplate').innerHTML;
             
             // Create the complete HTML document
             let printContent = '<!DOCTYPE html>';
@@ -962,22 +1031,40 @@ $pending_stats = $pending_stats_result->fetch_assoc();
             printContent += '<head>';
             printContent += '<title>Token - ' + tokenNo + '</title>';
             printContent += '<style>';
-            printContent += 'body { margin: 0; padding: 0; font-family: monospace; font-size: 12px; }';
-            printContent += '.token-container { width: 300px; padding: 15px; margin: 0 auto; }';
+            printContent += 'body { margin: 0; padding: 0; font-family: monospace; background: white; }';
             printContent += '@media print { body { margin: 0; padding: 0; } }';
             printContent += '</style>';
             printContent += '</head>';
             printContent += '<body>';
             printContent += template;
             printContent += '<script>';
-            printContent += 'document.getElementById("printTokenNo").textContent = "' + tokenNo + '";';
-            printContent += 'document.getElementById("printDate").textContent = "' + currentDate + '";';
-            printContent += 'document.getElementById("printTime").textContent = "' + currentTime + '";';
-            printContent += 'document.getElementById("printType").textContent = "' + tokenTypeFormatted + '";';
-            printContent += 'document.getElementById("printAssignedTo").textContent = "' + assignedTo + '";';
-            printContent += 'document.getElementById("printPatientId").textContent = "' + patientId + '";';
-            printContent += 'document.getElementById("printPatientName").textContent = "' + patientName + '";';
-            printContent += 'window.onload = function() { window.print(); setTimeout(function() { window.close(); }, 1000); }';
+            
+            if (useCompact) {
+                // Compact template population
+                printContent += 'document.getElementById("compactTokenNo").textContent = "' + tokenNo + '";';
+                printContent += 'document.getElementById("compactDate").textContent = "' + currentDate + '";';
+                printContent += 'document.getElementById("compactTime").textContent = "' + currentTime + '";';
+                printContent += 'document.getElementById("compactType").textContent = "' + tokenTypeFormatted + '";';
+                printContent += 'document.getElementById("compactPatientName").textContent = "' + patientName + '";';
+                printContent += 'document.getElementById("compactPatientId").textContent = "' + patientId + '";';
+                printContent += 'document.getElementById("compactAssignedTo").textContent = "' + assignedTo + '";';
+            } else {
+                // Standard template population
+                printContent += 'document.getElementById("printTokenNo").textContent = "' + tokenNo + '";';
+                printContent += 'document.getElementById("printDate").textContent = "' + currentDate + '";';
+                printContent += 'document.getElementById("printTime").textContent = "' + currentTime + '";';
+                printContent += 'document.getElementById("printType").textContent = "' + tokenTypeFormatted + '";';
+                printContent += 'document.getElementById("printAssignedTo").textContent = "' + assignedTo + '";';
+                printContent += 'document.getElementById("printPatientId").textContent = "' + patientId + '";';
+                printContent += 'document.getElementById("printPatientName").textContent = "' + patientName + '";';
+                printContent += 'document.getElementById("generatedDateTime").textContent = "' + new Date().toLocaleString() + '";';
+                printContent += 'document.getElementById("barcodeText").textContent = "' + tokenNo + '";';
+            }
+            
+            printContent += 'window.onload = function() { ';
+            printContent += 'window.print(); ';
+            printContent += 'setTimeout(function() { window.close(); }, 2000); ';
+            printContent += '};';
             printContent += '<\/script>';
             printContent += '</body>';
             printContent += '</html>';
@@ -1005,4 +1092,4 @@ $pending_stats = $pending_stats_result->fetch_assoc();
         });
     </script>
 </body>
-</html>
+</html>  
