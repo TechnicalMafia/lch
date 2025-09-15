@@ -2,13 +2,30 @@
 require_once __DIR__ . '/../../includes/functions.php';
 requireRole('doctor');
 
+// Process form submission to update visit
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_visit'])) {
+    $visit_id = $_POST['visit_id'];
+    $comments = $_POST['comments'];
+    $medicines = $_POST['medicines'];
+    
+    // Update visit using prepared statement
+    $query = "UPDATE visits SET comments = ?, medicines = ? WHERE id = ?";
+    $stmt = $conn->prepare($query);
+    $stmt->bind_param("ssi", $comments, $medicines, $visit_id);
+    
+    if ($stmt->execute()) {
+        $success = "Visit record updated successfully";
+    } else {
+        $error = "Error updating visit record: " . $stmt->error;
+    }
+}
+
 // Get patient ID from URL and validate it
 if (!isset($_GET['id']) || empty($_GET['id'])) {
     // Redirect back to patient queue if no valid patient ID
     header('Location: patient_queue.php');
     exit;
 }
-
 $patient_id = $_GET['id'];
 
 // Get patient details
@@ -41,13 +58,26 @@ $lab_reports = $lab_stmt->get_result();
 // Get patient tokens
 $tokens = getPatientTokens($patient_id);
 ?>
-
 <?php include __DIR__ . '/../../includes/header.php'; ?>
 
-<div class="mb-6">
-    <h1 class="text-2xl font-bold text-gray-800">Patient Details</h1>
-    <p class="text-gray-600">View complete patient history</p>
-</div>
+<!-- Success/Error Messages -->
+<?php if (isset($success)): ?>
+    <div class="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded mb-4">
+        <div class="flex items-center">
+            <i class="fas fa-check-circle mr-2"></i>
+            <?php echo $success; ?>
+        </div>
+    </div>
+<?php endif; ?>
+
+<?php if (isset($error)): ?>
+    <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
+        <div class="flex items-center">
+            <i class="fas fa-exclamation-circle mr-2"></i>
+            <?php echo $error; ?>
+        </div>
+    </div>
+<?php endif; ?>
 
 <?php if (isset($_GET['error']) && $_GET['error'] === 'patient_not_found'): ?>
 <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded mb-4">
@@ -125,15 +155,34 @@ $tokens = getPatientTokens($patient_id);
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Doctor</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Comments</th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Medicines</th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>
                         <tbody class="bg-white divide-y divide-gray-200">
-                            <?php while ($visit = $visits->fetch_assoc()): ?>
+                            <?php 
+                            // Reset the result pointer to fetch data again
+                            $visits->data_seek(0);
+                            while ($visit = $visits->fetch_assoc()): 
+                            ?>
                                 <tr>
                                     <td class="px-6 py-4 whitespace-nowrap"><?php echo date('d M Y', strtotime($visit['visit_date'])); ?></td>
                                     <td class="px-6 py-4 whitespace-nowrap"><?php echo $visit['doctor_name']; ?></td>
-                                    <td class="px-6 py-4"><?php echo $visit['comments'] ?: 'N/A'; ?></td>
-                                    <td class="px-6 py-4"><?php echo $visit['medicines'] ?: 'N/A'; ?></td>
+                                    <td class="px-6 py-4">
+                                        <div class="max-w-xs truncate" title="<?php echo htmlspecialchars($visit['comments'] ?: 'N/A'); ?>">
+                                            <?php echo $visit['comments'] ?: 'N/A'; ?>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4">
+                                        <div class="max-w-xs truncate" title="<?php echo htmlspecialchars($visit['medicines'] ?: 'N/A'); ?>">
+                                            <?php echo $visit['medicines'] ?: 'N/A'; ?>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                        <button onclick="openEditVisitModal(<?php echo $visit['id']; ?>, '<?php echo addslashes($visit['comments']); ?>', '<?php echo addslashes($visit['medicines']); ?>')" 
+                                                class="text-yellow-600 hover:text-yellow-900">
+                                            <i class="fas fa-edit"></i> Edit
+                                        </button>
+                                    </td>
                                 </tr>
                             <?php endwhile; ?>
                         </tbody>
@@ -208,6 +257,53 @@ $tokens = getPatientTokens($patient_id);
     </div>
 </div>
 
+<!-- Edit Visit Modal -->
+<div id="editVisitModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden overflow-y-auto h-full w-full z-50">
+    <div class="relative top-20 mx-auto p-5 border w-11/12 md:w-3/4 lg:w-1/2 shadow-lg rounded-md bg-white">
+        <div class="mt-3">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-medium text-gray-900">
+                    <i class="fas fa-edit mr-2 text-yellow-600"></i>
+                    Edit Visit Record
+                </h3>
+                <button onclick="closeEditVisitModal()" class="text-gray-400 hover:text-gray-600">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            
+            <form id="editVisitForm" method="POST" class="space-y-4">
+                <input type="hidden" name="update_visit" value="1">
+                <input type="hidden" name="visit_id" id="edit_visit_id">
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Comments / Diagnosis</label>
+                    <textarea name="comments" id="edit_comments" rows="4" 
+                              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              placeholder="Enter diagnosis or comments..."></textarea>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Prescribed Medicines</label>
+                    <textarea name="medicines" id="edit_medicines" rows="3" 
+                              class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              placeholder="Enter prescribed medicines..."></textarea>
+                </div>
+                
+                <div class="flex justify-end space-x-3 pt-4">
+                    <button type="button" onclick="closeEditVisitModal()" 
+                            class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400 transition duration-200">
+                        Cancel
+                    </button>
+                    <button type="submit" 
+                            class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 transition duration-200">
+                        <i class="fas fa-save mr-2"></i>Update Visit
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <script>
 // View report in new window - same as print but without auto-print
 function viewReport(reportId) {
@@ -219,6 +315,30 @@ function viewReport(reportId) {
 function printReport(reportId) {
     // Open the print page in a new window
     window.open(`/lch/modules/lab/print_report.php?id=${reportId}`, '_blank', 'width=800,height=600');
+}
+
+// Edit visit functions
+function openEditVisitModal(visitId, comments, medicines) {
+    // Populate form fields
+    document.getElementById('edit_visit_id').value = visitId;
+    document.getElementById('edit_comments').value = comments.replace(/\\'/g, "'").replace(/\\"/g, '"');
+    document.getElementById('edit_medicines').value = medicines.replace(/\\'/g, "'").replace(/\\"/g, '"');
+    
+    // Show modal
+    document.getElementById('editVisitModal').classList.remove('hidden');
+}
+
+function closeEditVisitModal() {
+    document.getElementById('editVisitModal').classList.add('hidden');
+    document.getElementById('editVisitForm').reset();
+}
+
+// Close modal when clicking outside
+window.onclick = function(event) {
+    const modal = document.getElementById('editVisitModal');
+    if (event.target === modal) {
+        closeEditVisitModal();
+    }
 }
 </script>
 

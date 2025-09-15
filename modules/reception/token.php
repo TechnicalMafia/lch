@@ -4,6 +4,8 @@ requireRole('reception');
 
 // Get filter parameters
 $token_type_filter = isset($_GET['token_type_filter']) ? $_GET['token_type_filter'] : 'all';
+$pending_from_date = isset($_GET['pending_from_date']) ? $_GET['pending_from_date'] : date('Y-m-d', strtotime('-7 days'));
+$pending_to_date = isset($_GET['pending_to_date']) ? $_GET['pending_to_date'] : date('Y-m-d');
 
 // Process form submission to generate token
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_token'])) {
@@ -22,48 +24,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_token'])) {
         if ($token_type === 'lab' && !$test_id) {
             $error = "Please select a test for lab token";
         } else {
-            // Generate token number
-            $token_no = generateToken($token_type);
-            
-            // Insert token into database
-            $query = "INSERT INTO tokens (patient_id, type, token_no, status, doctor_id, test_id) 
-                      VALUES ($patient_id, '$token_type', '$token_no', 'waiting', " . ($doctor_id ? "'$doctor_id'" : "NULL") . ", " . ($test_id ? "'$test_id'" : "NULL") . ")";
-            
-            if ($conn->query($query) === TRUE) {
-                $token_id = $conn->insert_id;
-                $success = "Token generated successfully: $token_no";
+            // For doctor tokens, check if patient already has a waiting doctor token
+            if ($token_type === 'doctor') {
+                $check_doctor_token_query = "SELECT id FROM tokens 
+                                           WHERE patient_id = $patient_id 
+                                           AND type = 'doctor' 
+                                           AND status = 'waiting'";
+                $check_result = $conn->query($check_doctor_token_query);
                 
-                // Get patient details
-                $patient = getPatient($patient_id);
-                
-                // Create billing record with token number and mark as unpaid initially
-                if ($token_type === 'doctor' && $doctor_id) {
-                    $doctor = getStaff($doctor_id);
-                    $service_name = "Doctor Consultation - Dr. " . $doctor['name'];
-                    $amount = 1000; // Default fee
-                } elseif ($token_type === 'lab' && $test_id) {
-                    $test = getTest($test_id);
-                    $service_name = "Lab Test - " . $test['test_name'];
-                    $amount = $test['price'];
-                } else {
-                    $service_name = ($token_type === 'doctor') ? 'Doctor Consultation' : 'Lab Test';
-                    $amount = ($token_type === 'doctor') ? 1000 : 500; // Default fees
+                if ($check_result->num_rows > 0) {
+                    $error = "Patient already has a waiting doctor token. Please complete or cancel the existing token first.";
                 }
+            }
+            
+            // Only proceed if no error
+            if (!isset($error)) {
+                // Generate token number
+                $token_no = generateToken($token_type);
                 
-                $billing_query = "INSERT INTO billing (patient_id, service_name, amount, paid_amount, status, token_id, token_number) 
-                                  VALUES ($patient_id, '$service_name', $amount, 0, 'unpaid', $token_id, '$token_no')";
-                $conn->query($billing_query);
+                // Insert token into database
+                $query = "INSERT INTO tokens (patient_id, type, token_no, status, doctor_id, test_id) 
+                          VALUES ($patient_id, '$token_type', '$token_no', 'waiting', " . ($doctor_id ? "'$doctor_id'" : "NULL") . ", " . ($test_id ? "'$test_id'" : "NULL") . ")";
                 
-                // Store token details for printing
-                $print_token_data = [
-                    'token_no' => $token_no,
-                    'patient_id' => $patient_id,
-                    'patient_name' => $patient['name'],
-                    'token_type' => $token_type,
-                    'assigned_to' => ($token_type === 'doctor' && $doctor_id) ? $doctor['name'] : (($token_type === 'lab' && $test_id) ? getTest($test_id)['test_name'] : 'N/A')
-                ];
-            } else {
-                $error = "Error: " . $conn->error;
+                if ($conn->query($query) === TRUE) {
+                    $token_id = $conn->insert_id;
+                    $success = "Token generated successfully: $token_no";
+                    
+                    // Get patient details
+                    $patient = getPatient($patient_id);
+                    
+                    // Create billing record with token number and mark as unpaid initially
+                    if ($token_type === 'doctor' && $doctor_id) {
+                        $doctor = getStaff($doctor_id);
+                        $service_name = "Doctor Consultation - Dr. " . $doctor['name'];
+                        $amount = 1000; // Default fee
+                    } elseif ($token_type === 'lab' && $test_id) {
+                        $test = getTest($test_id);
+                        $service_name = "Lab Test - " . $test['test_name'];
+                        $amount = $test['price'];
+                    } else {
+                        $service_name = ($token_type === 'doctor') ? 'Doctor Consultation' : 'Lab Test';
+                        $amount = ($token_type === 'doctor') ? 1000 : 500; // Default fees
+                    }
+                    
+                    $billing_query = "INSERT INTO billing (patient_id, service_name, amount, paid_amount, status, token_id, token_number) 
+                                      VALUES ($patient_id, '$service_name', $amount, 0, 'unpaid', $token_id, '$token_no')";
+                    $conn->query($billing_query);
+                    
+                    // Store token details for printing
+                    $print_token_data = [
+                        'token_no' => $token_no,
+                        'patient_id' => $patient_id,
+                        'patient_name' => $patient['name'],
+                        'token_type' => $token_type,
+                        'assigned_to' => ($token_type === 'doctor' && $doctor_id) ? $doctor['name'] : (($token_type === 'lab' && $test_id) ? getTest($test_id)['test_name'] : 'N/A')
+                    ];
+                } else {
+                    $error = "Error: " . $conn->error;
+                }
             }
         }
     }
@@ -108,29 +126,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['refund_token'])) {
     // Update corresponding billing record to refund
     $update_billing_query = "UPDATE billing SET status = 'refund' WHERE token_id = $token_id";
     if ($conn->query($update_billing_query) === TRUE) {
-        $success = "Token refunded successfully";
+        $success = "Token cancelled successfully";
     } else {
-        $error = "Error refunding token: " . $conn->error;
+        $error = "Error cancelling token: " . $conn->error;
     }
 }
 
 // Get all patients for dropdown
 $patients = getAllPatients();
-
 // Get all doctors for dropdown (from users with role 'doctor')
 $doctor_query = "SELECT u.id as user_id, s.id as staff_id, s.name FROM users u JOIN staff s ON u.staff_id = s.id WHERE u.role = 'doctor'";
 $doctors = $conn->query($doctor_query);
-
 // Get all tests for dropdown
 $tests = getAllTests();
-
 // Get today's tokens with filter
 $today = date('Y-m-d');
 $token_filter_clause = "";
 if ($token_type_filter !== 'all') {
     $token_filter_clause = " AND t.type = '$token_type_filter'";
 }
-
 $today_tokens_query = "SELECT t.*, p.name as patient_name, 
                       CASE WHEN t.doctor_id IS NOT NULL THEN s.name ELSE NULL END as doctor_name,
                       CASE WHEN t.test_id IS NOT NULL THEN ts.test_name ELSE NULL END as test_name
@@ -141,7 +155,6 @@ $today_tokens_query = "SELECT t.*, p.name as patient_name,
                       WHERE DATE(t.created_at) = '$today' AND t.status != 'cancelled' $token_filter_clause
                       ORDER BY t.created_at DESC";
 $today_tokens = $conn->query($today_tokens_query);
-
 // Get refunded tokens with filter
 $refunded_tokens_query = "SELECT t.*, p.name as patient_name, 
                          CASE WHEN t.doctor_id IS NOT NULL THEN s.name ELSE NULL END as doctor_name,
@@ -153,7 +166,6 @@ $refunded_tokens_query = "SELECT t.*, p.name as patient_name,
                          WHERE DATE(t.created_at) = '$today' AND t.status = 'cancelled' $token_filter_clause
                          ORDER BY t.created_at DESC";
 $refunded_tokens = $conn->query($refunded_tokens_query);
-
 // Get token statistics
 $stats_query = "SELECT 
                     COUNT(*) as total_tokens,
@@ -166,8 +178,30 @@ $stats_query = "SELECT
                 WHERE DATE(t.created_at) = '$today' $token_filter_clause";
 $stats_result = $conn->query($stats_query);
 $token_stats = $stats_result->fetch_assoc();
-?>
 
+// Get pending tokens with date filter
+$pending_date_filter = " AND DATE(t.created_at) BETWEEN '$pending_from_date' AND '$pending_to_date'";
+$pending_tokens_query = "SELECT t.*, p.name as patient_name, 
+                        CASE WHEN t.doctor_id IS NOT NULL THEN s.name ELSE NULL END as doctor_name,
+                        CASE WHEN t.test_id IS NOT NULL THEN ts.test_name ELSE NULL END as test_name
+                        FROM tokens t 
+                        JOIN patients p ON t.patient_id = p.id 
+                        LEFT JOIN staff s ON t.doctor_id = s.id 
+                        LEFT JOIN tests ts ON t.test_id = ts.id 
+                        WHERE t.status = 'waiting' $pending_date_filter
+                        ORDER BY t.created_at DESC";
+$pending_tokens = $conn->query($pending_tokens_query);
+
+// Get pending token statistics
+$pending_stats_query = "SELECT 
+                            COUNT(*) as total_pending,
+                            COUNT(CASE WHEN type = 'doctor' THEN 1 END) as pending_doctor,
+                            COUNT(CASE WHEN type = 'lab' THEN 1 END) as pending_lab
+                        FROM tokens t
+                        WHERE t.status = 'waiting' $pending_date_filter";
+$pending_stats_result = $conn->query($pending_stats_query);
+$pending_stats = $pending_stats_result->fetch_assoc();
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -307,7 +341,7 @@ $token_stats = $stats_result->fetch_assoc();
                 </form>
             </div>
         </div>
-
+        
         <!-- Token Statistics -->
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
             <div class="bg-white rounded-lg shadow-md p-4">
@@ -493,6 +527,136 @@ $token_stats = $stats_result->fetch_assoc();
             </div>
         </div>
         
+        <!-- Pending Tokens Section -->
+        <div class="bg-white rounded-lg shadow-md mb-8 overflow-hidden">
+            <div class="bg-orange-600 text-white px-6 py-4">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between">
+                    <h2 class="text-xl font-semibold flex items-center mb-2 md:mb-0">
+                        <i class="fas fa-hourglass-half mr-2"></i>
+                        All Pending Tokens
+                    </h2>
+                    <div class="flex items-center space-x-4">
+                        <div class="text-sm">
+                            Total: <span class="font-bold"><?php echo $pending_stats['total_pending'] ?: 0; ?></span>
+                            (Dr: <span class="font-bold"><?php echo $pending_stats['pending_doctor'] ?: 0; ?></span>
+                            | Lab: <span class="font-bold"><?php echo $pending_stats['pending_lab'] ?: 0; ?></span>)
+                        </div>
+                        <form method="get" class="flex items-center space-x-2">
+                            <input type="hidden" name="token_type_filter" value="<?php echo $token_type_filter; ?>">
+                            <input type="date" name="pending_from_date" value="<?php echo $pending_from_date; ?>" 
+                                   class="px-2 py-1 border border-gray-300 rounded text-sm">
+                            <span class="text-white">to</span>
+                            <input type="date" name="pending_to_date" value="<?php echo $pending_to_date; ?>" 
+                                   class="px-2 py-1 border border-gray-300 rounded text-sm">
+                            <button type="submit" class="bg-orange-700 text-white px-3 py-1 rounded text-sm hover:bg-orange-800">
+                                <i class="fas fa-filter mr-1"></i>Filter
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Token No</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Patient</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assigned To / Test</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Generated</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Waiting Since</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="bg-white divide-y divide-gray-200">
+                        <?php if ($pending_tokens->num_rows > 0): ?>
+                            <?php while ($token = $pending_tokens->fetch_assoc()): 
+                                $created_time = strtotime($token['created_at']);
+                                $current_time = time();
+                                $waiting_hours = floor(($current_time - $created_time) / 3600);
+                                $waiting_days = floor($waiting_hours / 24);
+                                ?>
+                                <tr class="hover:bg-gray-50 transition-colors">
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-sm font-medium <?php echo $token['type'] === 'doctor' ? 'bg-purple-100 text-purple-800' : 'bg-indigo-100 text-indigo-800'; ?>">
+                                            <?php echo $token['token_no']; ?>
+                                        </span>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm font-medium text-gray-900"><?php echo $token['patient_name']; ?></div>
+                                        <div class="text-sm text-gray-500">ID: <?php echo $token['patient_id']; ?></div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium <?php echo $token['type'] === 'doctor' ? 'bg-purple-100 text-purple-800' : 'bg-indigo-100 text-indigo-800'; ?>">
+                                            <i class="fas fa-<?php echo $token['type'] === 'doctor' ? 'user-md' : 'flask'; ?> mr-1"></i>
+                                            <?php echo ucfirst($token['type']); ?>
+                                        </span>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <div class="text-sm text-gray-900">
+                                            <?php 
+                                            if ($token['type'] === 'doctor' && $token['doctor_name']) {
+                                                echo "Dr. " . $token['doctor_name'];
+                                            } elseif ($token['type'] === 'lab' && $token['test_name']) {
+                                                echo $token['test_name'];
+                                            } else {
+                                                echo "<span class='text-gray-500'>Not assigned</span>";
+                                            }
+                                            ?>
+                                        </div>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                        <?php echo date('d M Y, h:i A', strtotime($token['created_at'])); ?>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium <?php 
+                                            if ($waiting_days > 0) echo 'bg-red-100 text-red-800';
+                                            elseif ($waiting_hours > 2) echo 'bg-yellow-100 text-yellow-800';
+                                            else echo 'bg-green-100 text-green-800';
+                                        ?>">
+                                            <?php 
+                                            if ($waiting_days > 0) {
+                                                echo $waiting_days . ' day' . ($waiting_days > 1 ? 's' : '');
+                                            } elseif ($waiting_hours > 0) {
+                                                echo $waiting_hours . ' hour' . ($waiting_hours > 1 ? 's' : '');
+                                            } else {
+                                                echo '< 1 hour';
+                                            }
+                                            ?>
+                                        </span>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                                        <button onclick="printToken('<?php echo $token['token_no']; ?>', '<?php echo $token['patient_id']; ?>', '<?php echo $token['patient_name']; ?>', '<?php echo $token['type']; ?>', '<?php echo ($token['type'] === 'doctor' && $token['doctor_name']) ? "Dr. " . $token['doctor_name'] : (($token['type'] === 'lab' && $token['test_name']) ? $token['test_name'] : 'N/A'); ?>')" 
+                                                class="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 mr-2 text-xs">
+                                            <i class="fas fa-print"></i>
+                                        </button>
+                                        <button onclick="editToken(<?php echo $token['id']; ?>, '<?php echo $token['type']; ?>', <?php echo $token['doctor_id'] ?: 'null'; ?>, <?php echo $token['test_id'] ?: 'null'; ?>)" 
+                                                class="bg-yellow-600 text-white px-3 py-1 rounded hover:bg-yellow-700 mr-2 text-xs">
+                                            <i class="fas fa-edit"></i>
+                                        </button>
+                                        <button onclick="confirmRefund(<?php echo $token['id']; ?>)" 
+                                                class="bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 text-xs">
+                                            <i class="fas fa-times"></i> Cancel
+                                        </button>
+                                    </td>
+                                </tr>
+                            <?php endwhile; ?>
+                        <?php else: ?>
+                            <tr>
+                                <td colspan="7" class="px-6 py-12 text-center">
+                                    <i class="fas fa-hourglass-end text-gray-400 text-4xl mb-4"></i>
+                                    <h3 class="text-lg font-medium text-gray-900 mb-1">No pending tokens</h3>
+                                    <p class="text-gray-500">
+                                        No pending tokens found for the selected date range.
+                                    </p>
+                                </td>
+                            </tr>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
         <!-- Cancelled/Refunded Tokens Card -->
         <div class="bg-white rounded-lg shadow-md overflow-hidden">
             <div class="bg-red-600 text-white px-6 py-4">
@@ -614,9 +778,9 @@ $token_stats = $stats_result->fetch_assoc();
     <div id="refundModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center hidden z-50">
         <div class="bg-white p-6 rounded-lg shadow-lg w-full max-w-md">
             <h2 class="text-xl font-semibold mb-4 text-red-600">
-                <i class="fas fa-exclamation-triangle mr-2"></i>Confirm Refund
+                <i class="fas fa-exclamation-triangle mr-2"></i>Confirm Cancel
             </h2>
-            <p class="mb-4">Are you sure you want to refund this token? This will mark the token as cancelled and update the billing record to refunded status.</p>
+            <p class="mb-4">Are you sure you want to cancel this token? This will mark the token as cancelled and update the billing record to refunded status.</p>
             <div class="flex justify-end space-x-3">
                 <button type="button" onclick="closeRefundModal()" 
                         class="bg-gray-500 text-white px-4 py-2 rounded-md hover:bg-gray-600">
@@ -626,7 +790,7 @@ $token_stats = $stats_result->fetch_assoc();
                     <input type="hidden" id="refund_token_id" name="token_id">
                     <button type="submit" name="refund_token" 
                             class="bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600">
-                        <i class="fas fa-undo mr-2"></i>Refund Token
+                        <i class="fas fa-times mr-2"></i>Cancel Token
                     </button>
                 </form>
             </div>
@@ -682,6 +846,51 @@ $token_stats = $stats_result->fetch_assoc();
                 doctorDropdown.style.display = 'none';
                 testDropdown.style.display = 'none';
                 document.getElementById('test_id').removeAttribute('required');
+            }
+        });
+        
+        // Check for existing doctor tokens when patient is selected
+        document.getElementById('patient_id').addEventListener('change', function() {
+            const patientId = this.value;
+            const tokenType = document.getElementById('token_type').value;
+            
+            if (patientId && tokenType === 'doctor') {
+                // Check if patient already has a waiting doctor token
+                fetch(`check_patient_doctor_token.php?patient_id=${patientId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.hasToken) {
+                            // Show warning but don't prevent form submission
+                            const warningDiv = document.createElement('div');
+                            warningDiv.className = 'bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded-lg mb-4';
+                            warningDiv.innerHTML = `
+                                <div class="flex items-center">
+                                    <i class="fas fa-exclamation-triangle mr-2"></i>
+                                    Patient already has a waiting doctor token (${data.tokenNo}). 
+                                    Please complete or cancel the existing token first.
+                                </div>
+                            `;
+                            
+                            // Remove any existing warning
+                            const existingWarning = document.querySelector('.bg-yellow-100');
+                            if (existingWarning) {
+                                existingWarning.remove();
+                            }
+                            
+                            // Insert warning after the form
+                            const form = document.getElementById('tokenForm');
+                            form.parentNode.insertBefore(warningDiv, form.nextSibling);
+                        } else {
+                            // Remove any existing warning
+                            const existingWarning = document.querySelector('.bg-yellow-100');
+                            if (existingWarning) {
+                                existingWarning.remove();
+                            }
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                    });
             }
         });
         
