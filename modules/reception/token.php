@@ -1,12 +1,20 @@
 <?php
 require_once '../../includes/functions.php';
 requireRole('reception');
-
+// Enable error reporting for debugging
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+// Get current user information
+try {
+    $current_user = getUser($_SESSION['user_id']);
+    $current_username = $current_user['username'];
+} catch (Exception $e) {
+    $current_username = 'Unknown';
+}
 // Get filter parameters
 $token_type_filter = isset($_GET['token_type_filter']) ? $_GET['token_type_filter'] : 'all';
 $pending_from_date = isset($_GET['pending_from_date']) ? $_GET['pending_from_date'] : date('Y-m-d', strtotime('-7 days'));
 $pending_to_date = isset($_GET['pending_to_date']) ? $_GET['pending_to_date'] : date('Y-m-d');
-
 // Process form submission to generate token
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_token'])) {
     // Check if required fields are set
@@ -39,54 +47,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_token'])) {
             
             // Only proceed if no error
             if (!isset($error)) {
-                // Generate token number
-                $token_no = generateToken($token_type);
-                
-                // Insert token into database
-                $query = "INSERT INTO tokens (patient_id, type, token_no, status, doctor_id, test_id) 
-                          VALUES ($patient_id, '$token_type', '$token_no', 'waiting', " . ($doctor_id ? "'$doctor_id'" : "NULL") . ", " . ($test_id ? "'$test_id'" : "NULL") . ")";
-                
-                if ($conn->query($query) === TRUE) {
-                    $token_id = $conn->insert_id;
-                    $success = "Token generated successfully: $token_no";
-                    
-                    // Get patient details
-                    $patient = getPatient($patient_id);
-                    
-                    // Create billing record with token number and mark as unpaid initially
-                    if ($token_type === 'doctor' && $doctor_id) {
-                        $doctor = getStaff($doctor_id);
-                        $service_name = "Doctor Consultation - Dr. " . $doctor['name'];
-                        $amount = 1000; // Default fee
-                    } elseif ($token_type === 'lab' && $test_id) {
-                        $test = getTest($test_id);
-                        $service_name = "Lab Test - " . $test['test_name'];
-                        $amount = $test['price'];
-                    } else {
-                        $service_name = ($token_type === 'doctor') ? 'Doctor Consultation' : 'Lab Test';
-                        $amount = ($token_type === 'doctor') ? 1000 : 500; // Default fees
-                    }
-                    
-                    $billing_query = "INSERT INTO billing (patient_id, service_name, amount, paid_amount, status, token_id, token_number) 
-                                      VALUES ($patient_id, '$service_name', $amount, 0, 'unpaid', $token_id, '$token_no')";
-                    $conn->query($billing_query);
-                    
-                    // Store token details for printing
-                    $print_token_data = [
-                        'token_no' => $token_no,
-                        'patient_id' => $patient_id,
-                        'patient_name' => $patient['name'],
-                        'token_type' => $token_type,
-                        'assigned_to' => ($token_type === 'doctor' && $doctor_id) ? $doctor['name'] : (($token_type === 'lab' && $test_id) ? getTest($test_id)['test_name'] : 'N/A')
-                    ];
+                // Create billing record first and mark as paid immediately
+                if ($token_type === 'doctor' && $doctor_id) {
+                    $doctor = getStaff($doctor_id);
+                    $service_name = "Doctor Consultation - Dr. " . $doctor['name'];
+                    $amount = 1000; // Default fee
+                } elseif ($token_type === 'lab' && $test_id) {
+                    $test = getTest($test_id);
+                    $service_name = "Lab Test - " . $test['test_name'];
+                    $amount = $test['price'];
                 } else {
-                    $error = "Error: " . $conn->error;
+                    $service_name = ($token_type === 'doctor') ? 'Doctor Consultation' : 'Lab Test';
+                    $amount = ($token_type === 'doctor') ? 1000 : 500; // Default fees
+                }
+                
+                // Insert billing record as PAID
+                $billing_query = "INSERT INTO billing (patient_id, service_name, amount, paid_amount, status) 
+                                  VALUES ($patient_id, '$service_name', $amount, $amount, 'paid')";
+                
+                if ($conn->query($billing_query) === TRUE) {
+                    $bill_id = $conn->insert_id;
+                    
+                    // Generate token number
+                    $token_no = generateToken($token_type);
+                    
+                    // Insert token into database
+                    $query = "INSERT INTO tokens (patient_id, type, token_no, status, doctor_id, test_id) 
+                              VALUES ($patient_id, '$token_type', '$token_no', 'waiting', " . ($doctor_id ? "'$doctor_id'" : "NULL") . ", " . ($test_id ? "'$test_id'" : "NULL") . ")";
+                    
+                    if ($conn->query($query) === TRUE) {
+                        $token_id = $conn->insert_id;
+                        
+                        // Update billing record with token_id
+                        $update_billing_query = "UPDATE billing SET token_id = $token_id WHERE id = $bill_id";
+                        $conn->query($update_billing_query);
+                        
+                        $success = "Token generated successfully: $token_no (Bill ID: $bill_id)";
+                        
+                        // Get patient details
+                        $patient = getPatient($patient_id);
+                        
+                        // Store token details for printing
+                        $print_token_data = [
+                            'token_no' => $token_no,
+                            'patient_id' => $patient_id,
+                            'patient_name' => $patient['name'],
+                            'token_type' => $token_type,
+                            'assigned_to' => ($token_type === 'doctor' && $doctor_id) ? $doctor['name'] : (($token_type === 'lab' && $test_id) ? getTest($test_id)['test_name'] : 'N/A'),
+                            'bill_id' => $bill_id,
+                            'generated_by' => $current_username,
+                            'amount' => $amount
+                        ];
+                    } else {
+                        $error = "Error creating token: " . $conn->error;
+                    }
+                } else {
+                    $error = "Error creating billing record: " . $conn->error;
                 }
             }
         }
     }
 }
-
 // Process form submission to update token
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_token'])) {
     $token_id = $_POST['token_id'];
@@ -114,7 +135,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_token'])) {
         $error = "Error updating token: " . $conn->error;
     }
 }
-
 // Process form submission to refund token
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['refund_token'])) {
     $token_id = $_POST['token_id'];
@@ -131,7 +151,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['refund_token'])) {
         $error = "Error cancelling token: " . $conn->error;
     }
 }
-
 // Get all patients for dropdown
 $patients = getAllPatients();
 // Get all doctors for dropdown (from users with role 'doctor')
@@ -147,11 +166,13 @@ if ($token_type_filter !== 'all') {
 }
 $today_tokens_query = "SELECT t.*, p.name as patient_name, 
                       CASE WHEN t.doctor_id IS NOT NULL THEN s.name ELSE NULL END as doctor_name,
-                      CASE WHEN t.test_id IS NOT NULL THEN ts.test_name ELSE NULL END as test_name
+                      CASE WHEN t.test_id IS NOT NULL THEN ts.test_name ELSE NULL END as test_name,
+                      b.id as bill_id, b.status as bill_status
                       FROM tokens t 
                       JOIN patients p ON t.patient_id = p.id 
                       LEFT JOIN staff s ON t.doctor_id = s.id 
                       LEFT JOIN tests ts ON t.test_id = ts.id 
+                      LEFT JOIN billing b ON t.id = b.token_id
                       WHERE DATE(t.created_at) = '$today' AND t.status != 'cancelled' $token_filter_clause
                       ORDER BY t.created_at DESC";
 $today_tokens = $conn->query($today_tokens_query);
@@ -178,20 +199,20 @@ $stats_query = "SELECT
                 WHERE DATE(t.created_at) = '$today' $token_filter_clause";
 $stats_result = $conn->query($stats_query);
 $token_stats = $stats_result->fetch_assoc();
-
 // Get pending tokens with date filter
 $pending_date_filter = " AND DATE(t.created_at) BETWEEN '$pending_from_date' AND '$pending_to_date'";
 $pending_tokens_query = "SELECT t.*, p.name as patient_name, 
                         CASE WHEN t.doctor_id IS NOT NULL THEN s.name ELSE NULL END as doctor_name,
-                        CASE WHEN t.test_id IS NOT NULL THEN ts.test_name ELSE NULL END as test_name
+                        CASE WHEN t.test_id IS NOT NULL THEN ts.test_name ELSE NULL END as test_name,
+                        b.id as bill_id
                         FROM tokens t 
                         JOIN patients p ON t.patient_id = p.id 
                         LEFT JOIN staff s ON t.doctor_id = s.id 
                         LEFT JOIN tests ts ON t.test_id = ts.id 
+                        LEFT JOIN billing b ON t.id = b.token_id
                         WHERE t.status = 'waiting' $pending_date_filter
                         ORDER BY t.created_at DESC";
 $pending_tokens = $conn->query($pending_tokens_query);
-
 // Get pending token statistics
 $pending_stats_query = "SELECT 
                             COUNT(*) as total_pending,
@@ -210,6 +231,66 @@ $pending_stats = $pending_stats_result->fetch_assoc();
     <title>Generate Token - Hospital Management System</title>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+        
+        .modal-content {
+            background-color: white;
+            margin: 10% auto;
+            padding: 20px;
+            border-radius: 10px;
+            width: 80%;
+            max-width: 600px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        
+        .close:hover {
+            color: black;
+        }
+        
+        .thermal-print {
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            text-align: center;
+            max-width: 300px;
+            margin: 0 auto;
+            font-family: 'Courier New', monospace;
+            color: black;
+        }
+        
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            .thermal-print, .thermal-print * {
+                visibility: visible;
+            }
+            .thermal-print {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+            }
+        }
+    </style>
 </head>
 <body class="bg-gray-100">
     <?php include '../../includes/header.php'; ?>
@@ -228,7 +309,7 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                         <?php echo $success; ?>
                     </div>
                     <?php if (isset($print_token_data)): ?>
-                        <button onclick="printToken('<?php echo $print_token_data['token_no']; ?>', '<?php echo $print_token_data['patient_id']; ?>', '<?php echo $print_token_data['patient_name']; ?>', '<?php echo $print_token_data['token_type']; ?>', '<?php echo ($print_token_data['token_type'] === 'doctor' && $print_token_data['assigned_to']) ? "Dr. " . $print_token_data['assigned_to'] : (($print_token_data['token_type'] === 'lab' && $print_token_data['assigned_to']) ? $print_token_data['assigned_to'] : 'N/A'); ?>')" 
+                        <button onclick="showPrintPreview('<?php echo htmlspecialchars(json_encode($print_token_data)); ?>')" 
                                 class="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700">
                             <i class="fas fa-print mr-2"></i>Print Token
                         </button>
@@ -261,11 +342,16 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                             <label for="patient_id" class="block text-gray-700 font-medium mb-2">Select Patient <span class="text-red-500">*</span></label>
                             <select name="patient_id" id="patient_id" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500" required>
                                 <option value="">Select Patient</option>
-                                <?php while ($patient = $patients->fetch_assoc()): ?>
-                                    <option value="<?php echo $patient['id']; ?>">
-                                        <?php echo $patient['name']; ?> (ID: <?php echo $patient['id']; ?>) - <?php echo $patient['contact']; ?>
-                                    </option>
-                                <?php endwhile; ?>
+                                <?php 
+                                if ($patients) {
+                                    $patients->data_seek(0);
+                                    while ($patient = $patients->fetch_assoc()): ?>
+                                        <option value="<?php echo $patient['id']; ?>">
+                                            <?php echo $patient['name']; ?> (ID: <?php echo $patient['id']; ?>) - <?php echo $patient['contact']; ?>
+                                        </option>
+                                    <?php endwhile;
+                                }
+                                ?>
                             </select>
                         </div>
                         
@@ -283,10 +369,13 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                             <select name="doctor_id" id="doctor_id" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500">
                                 <option value="">Select Doctor (Optional)</option>
                                 <?php 
-                                $doctors->data_seek(0); // Reset pointer
-                                while ($doctor = $doctors->fetch_assoc()): ?>
-                                    <option value="<?php echo $doctor['staff_id']; ?>">Dr. <?php echo $doctor['name']; ?></option>
-                                <?php endwhile; ?>
+                                if ($doctors) {
+                                    $doctors->data_seek(0);
+                                    while ($doctor = $doctors->fetch_assoc()): ?>
+                                        <option value="<?php echo $doctor['staff_id']; ?>">Dr. <?php echo $doctor['name']; ?></option>
+                                    <?php endwhile;
+                                }
+                                ?>
                             </select>
                             <div class="mt-1 text-xs text-gray-500">Optional - Leave blank for general consultation</div>
                         </div>
@@ -295,11 +384,16 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                             <label for="test_id" class="block text-gray-700 font-medium mb-2">Select Test <span class="text-red-500">*</span></label>
                             <select name="test_id" id="test_id" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500">
                                 <option value="">Select Test</option>
-                                <?php while ($test = $tests->fetch_assoc()): ?>
-                                    <option value="<?php echo $test['id']; ?>">
-                                        <?php echo $test['test_name']; ?> - <?php echo formatCurrency($test['price']); ?>
-                                    </option>
-                                <?php endwhile; ?>
+                                <?php 
+                                if ($tests) {
+                                    $tests->data_seek(0);
+                                    while ($test = $tests->fetch_assoc()): ?>
+                                        <option value="<?php echo $test['id']; ?>">
+                                            <?php echo $test['test_name']; ?> - <?php echo formatCurrency($test['price']); ?>
+                                        </option>
+                                    <?php endwhile;
+                                }
+                                ?>
                             </select>
                             <div class="mt-1 text-xs text-gray-500">Required for lab tokens</div>
                         </div>
@@ -313,31 +407,6 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                             <i class="fas fa-plus mr-2"></i>Generate Token
                         </button>
                     </div>
-                </form>
-            </div>
-        </div>
-        
-        <!-- Token Filter -->
-        <div class="bg-white rounded-lg shadow-md mb-6 overflow-hidden">
-            <div class="bg-blue-600 text-white px-6 py-4">
-                <h2 class="text-xl font-semibold flex items-center">
-                    <i class="fas fa-filter mr-2"></i>
-                    Filter Tokens
-                </h2>
-            </div>
-            <div class="p-6">
-                <form method="get" class="flex items-end space-x-4">
-                    <div>
-                        <label for="token_type_filter" class="block text-gray-700 font-medium mb-2">Show Tokens</label>
-                        <select id="token_type_filter" name="token_type_filter" class="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
-                            <option value="all" <?php echo $token_type_filter === 'all' ? 'selected' : ''; ?>>All Tokens</option>
-                            <option value="doctor" <?php echo $token_type_filter === 'doctor' ? 'selected' : ''; ?>>Doctor Tokens Only</option>
-                            <option value="lab" <?php echo $token_type_filter === 'lab' ? 'selected' : ''; ?>>Lab Tokens Only</option>
-                        </select>
-                    </div>
-                    <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">
-                        <i class="fas fa-filter mr-2"></i>Apply Filter
-                    </button>
                 </form>
             </div>
         </div>
@@ -422,12 +491,6 @@ $pending_stats = $pending_stats_result->fetch_assoc();
             <div class="bg-blue-600 text-white px-6 py-4">
                 <h2 class="text-xl font-semibold flex items-center justify-between">
                     <span><i class="fas fa-ticket-alt mr-2"></i>Today's Active Tokens</span>
-                    <?php if ($token_type_filter !== 'all'): ?>
-                        <span class="bg-blue-700 px-3 py-1 rounded-full text-sm">
-                            <i class="fas fa-filter mr-1"></i>
-                            Showing: <?php echo ucfirst($token_type_filter); ?> Only
-                        </span>
-                    <?php endif; ?>
                 </h2>
             </div>
             <div class="overflow-x-auto">
@@ -438,13 +501,14 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Patient</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assigned To / Test</th>
+                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Bill ID</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Generated</th>
                             <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                         </tr>
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200">
-                        <?php if ($today_tokens->num_rows > 0): ?>
+                        <?php if ($today_tokens && $today_tokens->num_rows > 0): ?>
                             <?php while ($token = $today_tokens->fetch_assoc()): ?>
                                 <tr class="hover:bg-gray-50 transition-colors">
                                     <td class="px-6 py-4 whitespace-nowrap">
@@ -476,6 +540,15 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                                         </div>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap">
+                                        <?php if ($token['bill_id']): ?>
+                                            <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                                #<?php echo $token['bill_id']; ?>
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="text-gray-500">-</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
                                         <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium <?php 
                                             if ($token['status'] === 'waiting') echo 'bg-yellow-100 text-yellow-800';
                                             elseif ($token['status'] === 'completed') echo 'bg-green-100 text-green-800';
@@ -493,7 +566,16 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                                         <?php echo date('h:i A', strtotime($token['created_at'])); ?>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                        <button onclick="printToken('<?php echo $token['token_no']; ?>', '<?php echo $token['patient_id']; ?>', '<?php echo $token['patient_name']; ?>', '<?php echo $token['type']; ?>', '<?php echo ($token['type'] === 'doctor' && $token['doctor_name']) ? "Dr. " . $token['doctor_name'] : (($token['type'] === 'lab' && $token['test_name']) ? $token['test_name'] : 'N/A'); ?>')" 
+                                        <button onclick="showPrintPreview('<?php echo htmlspecialchars(json_encode([
+                                            'token_no' => $token['token_no'],
+                                            'patient_id' => $token['patient_id'],
+                                            'patient_name' => $token['patient_name'],
+                                            'token_type' => $token['type'],
+                                            'assigned_to' => ($token['type'] === 'doctor' && $token['doctor_name']) ? "Dr. " . $token['doctor_name'] : (($token['type'] === 'lab' && $token['test_name']) ? $token['test_name'] : 'N/A'),
+                                            'bill_id' => $token['bill_id'] ?? null,
+                                            'generated_by' => $current_username,
+                                            'amount' => $token['type'] === 'doctor' ? 1000 : 500
+                                        ])); ?>')" 
                                                 class="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 mr-2 text-xs">
                                             <i class="fas fa-print"></i>
                                         </button>
@@ -510,15 +592,10 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                             <?php endwhile; ?>
                         <?php else: ?>
                             <tr>
-                                <td colspan="7" class="px-6 py-12 text-center">
+                                <td colspan="8" class="px-6 py-12 text-center">
                                     <i class="fas fa-ticket-alt text-gray-400 text-4xl mb-4"></i>
                                     <h3 class="text-lg font-medium text-gray-900 mb-1">No active tokens</h3>
-                                    <p class="text-gray-500">
-                                        <?php if ($token_type_filter !== 'all'): ?>
-                                            No <?php echo $token_type_filter; ?> tokens generated today.
-                                        <?php else: ?>
-                                            No tokens have been generated today.
-                                        <?php endif; ?>
+                                    <p class="text-gray-500">No tokens have been generated today.</p>
                                 </td>
                             </tr>
                         <?php endif; ?>
@@ -569,7 +646,7 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                         </tr>
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200">
-                        <?php if ($pending_tokens->num_rows > 0): ?>
+                        <?php if ($pending_tokens && $pending_tokens->num_rows > 0): ?>
                             <?php while ($token = $pending_tokens->fetch_assoc()): 
                                 $created_time = strtotime($token['created_at']);
                                 $current_time = time();
@@ -626,7 +703,20 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                                         </span>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                        <button onclick="printToken('<?php echo $token['token_no']; ?>', '<?php echo $token['patient_id']; ?>', '<?php echo $token['patient_name']; ?>', '<?php echo $token['type']; ?>', '<?php echo ($token['type'] === 'doctor' && $token['doctor_name']) ? "Dr. " . $token['doctor_name'] : (($token['type'] === 'lab' && $token['test_name']) ? $token['test_name'] : 'N/A'); ?>')" 
+                                        <?php 
+                                        // Create a safe data array for JSON encoding
+                                        $token_data = [
+                                            'token_no' => $token['token_no'],
+                                            'patient_id' => $token['patient_id'],
+                                            'patient_name' => $token['patient_name'],
+                                            'token_type' => $token['type'],
+                                            'assigned_to' => ($token['type'] === 'doctor' && $token['doctor_name']) ? "Dr. " . $token['doctor_name'] : (($token['type'] === 'lab' && $token['test_name']) ? $token['test_name'] : 'N/A'),
+                                            'bill_id' => $token['bill_id'] ?? null,
+                                            'generated_by' => $current_username,
+                                            'amount' => $token['type'] === 'doctor' ? 1000 : 500
+                                        ];
+                                        ?>
+                                        <button onclick="showPrintPreview('<?php echo htmlspecialchars(json_encode($token_data)); ?>')" 
                                                 class="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 mr-2 text-xs">
                                             <i class="fas fa-print"></i>
                                         </button>
@@ -677,7 +767,7 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                         </tr>
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200">
-                        <?php if ($refunded_tokens->num_rows > 0): ?>
+                        <?php if ($refunded_tokens && $refunded_tokens->num_rows > 0): ?>
                             <?php while ($token = $refunded_tokens->fetch_assoc()): ?>
                                 <tr class="hover:bg-gray-50 transition-colors">
                                     <td class="px-6 py-4 whitespace-nowrap">
@@ -727,8 +817,9 @@ $pending_stats = $pending_stats_result->fetch_assoc();
     </div>
     
     <!-- Edit Token Modal -->
-    <div id="editTokenModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center hidden z-50">
-        <div class="bg-white p-6 rounded-lg shadow-lg w-full max-w-md">
+    <div id="editTokenModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeEditModal()">&times;</span>
             <h2 class="text-xl font-semibold mb-4 text-indigo-600">
                 <i class="fas fa-edit mr-2"></i>Edit Token
             </h2>
@@ -743,10 +834,13 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                     <select id="edit_doctor_id" name="edit_doctor_id" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500">
                         <option value="">Select Doctor</option>
                         <?php 
-                        $doctors->data_seek(0); // Reset pointer
-                        while ($doctor = $doctors->fetch_assoc()): ?>
-                            <option value="<?php echo $doctor['staff_id']; ?>">Dr. <?php echo $doctor['name']; ?></option>
-                        <?php endwhile; ?>
+                        if ($doctors) {
+                            $doctors->data_seek(0);
+                            while ($doctor = $doctors->fetch_assoc()): ?>
+                                <option value="<?php echo $doctor['staff_id']; ?>">Dr. <?php echo $doctor['name']; ?></option>
+                            <?php endwhile;
+                        }
+                        ?>
                     </select>
                 </div>
                 <div id="edit_test_dropdown" class="mb-4" style="display: none;">
@@ -754,10 +848,13 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                     <select id="edit_test_id" name="edit_test_id" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500">
                         <option value="">Select Test</option>
                         <?php 
-                        $tests->data_seek(0); // Reset pointer
-                        while ($test = $tests->fetch_assoc()): ?>
-                            <option value="<?php echo $test['id']; ?>"><?php echo $test['test_name']; ?> - <?php echo formatCurrency($test['price']); ?></option>
-                        <?php endwhile; ?>
+                        if ($tests) {
+                            $tests->data_seek(0);
+                            while ($test = $tests->fetch_assoc()): ?>
+                                <option value="<?php echo $test['id']; ?>"><?php echo $test['test_name']; ?> - <?php echo formatCurrency($test['price']); ?></option>
+                            <?php endwhile;
+                        }
+                        ?>
                     </select>
                 </div>
                 <div class="flex justify-end space-x-3">
@@ -775,8 +872,9 @@ $pending_stats = $pending_stats_result->fetch_assoc();
     </div>
     
     <!-- Refund Confirmation Modal -->
-    <div id="refundModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 flex items-center justify-center hidden z-50">
-        <div class="bg-white p-6 rounded-lg shadow-lg w-full max-w-md">
+    <div id="refundModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeRefundModal()">&times;</span>
             <h2 class="text-xl font-semibold mb-4 text-red-600">
                 <i class="fas fa-exclamation-triangle mr-2"></i>Confirm Cancel
             </h2>
@@ -797,96 +895,21 @@ $pending_stats = $pending_stats_result->fetch_assoc();
         </div>
     </div>
     
-    <!-- Professional Token Template for Thermal Printing -->
-    <div id="tokenTemplate" style="display: none;">
-        <div style="width: 320px; padding: 0; margin: 0; font-family: 'Courier New', monospace; font-size: 11px; line-height: 1.2; background: white;">
-            <!-- Header Section -->
-            <div style="text-align: center; padding: 8px 0; border-bottom: 2px solid #333; margin-bottom: 8px;">
-                <div style="font-size: 16px; font-weight: bold; margin: 0; text-transform: uppercase;">Hospital Management System</div>
-                <div style="font-size: 10px; margin: 2px 0; font-weight: normal;">123 Medical Street, Lahore</div>
-                <div style="font-size: 10px; margin: 2px 0; font-weight: normal;">Phone: 0300-1234567</div>
-                <div style="font-size: 10px; margin: 2px 0; font-weight: normal;">Emergency: 1122</div>
+    <!-- Print Preview Modal -->
+    <div id="printPreviewModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closePrintPreview()">&times;</span>
+            <h3 class="text-xl font-bold mb-4">Token Preview</h3>
+            <div id="thermalContent" class="thermal-print">
+                <!-- Thermal print content will be inserted here -->
             </div>
-            
-            <!-- Token Number Section -->
-            <div style="text-align: center; margin: 8px 0; padding: 6px; background: #f0f0f0; border-radius: 4px;">
-                <div style="font-size: 12px; font-weight: normal; margin: 0; color: #666;">TOKEN NUMBER</div>
-                <div id="printTokenNo" style="font-size: 20px; font-weight: bold; margin: 2px 0; color: #333; letter-spacing: 1px;"></div>
-                <div style="font-size: 10px; margin: 2px 0; color: #666;">
-                    <span id="printDate"></span> | <span id="printTime"></span>
-                </div>
-            </div>
-            
-            <!-- Token Type Section -->
-            <div style="margin: 10px 0; padding: 6px; border-left: 4px solid #007bff; background: #f8f9fa;">
-                <div style="font-size: 11px; font-weight: bold; margin: 0 0 2px 0; color: #333;">TOKEN TYPE</div>
-                <div id="printType" style="font-size: 13px; font-weight: bold; margin: 0; color: #007bff; text-transform: uppercase;"></div>
-                <div style="font-size: 10px; margin: 2px 0; color: #666;">ASSIGNED TO:</div>
-                <div id="printAssignedTo" style="font-size: 11px; font-weight: bold; margin: 0; color: #333;"></div>
-            </div>
-            
-            <!-- Patient Information Section -->
-            <div style="margin: 10px 0; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                <div style="font-size: 11px; font-weight: bold; margin: 0 0 6px 0; text-align: center; text-transform: uppercase; color: #333; border-bottom: 1px solid #ddd; padding-bottom: 4px;">Patient Information</div>
-                <div style="display: flex; justify-content: space-between; margin: 3px 0;">
-                    <span style="font-weight: bold; color: #666;">ID:</span>
-                    <span id="printPatientId" style="font-weight: bold; color: #333;"></span>
-                </div>
-                <div style="display: flex; justify-content: space-between; margin: 3px 0;">
-                    <span style="font-weight: bold; color: #666;">Name:</span>
-                    <span id="printPatientName" style="font-weight: bold; color: #333; max-width: 180px; text-align: right;"></span>
-                </div>
-            </div>
-            
-            <!-- Instructions Section -->
-            <div style="margin: 12px 0; padding: 8px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 4px; text-align: center;">
-                <div style="font-size: 11px; font-weight: bold; margin: 0 0 4px 0; color: #856404;">⚠️ IMPORTANT INSTRUCTIONS</div>
-                <div style="font-size: 9px; margin: 2px 0; color: #856404;">• Please wait for your turn to be called</div>
-                <div style="font-size: 9px; margin: 2px 0; color: #856404;">• Keep this token safe for verification</div>
-                <div style="font-size: 9px; margin: 2px 0; color: #856404;">• Present this token when called</div>
-            </div>
-            
-            <!-- Footer Section -->
-            <div style="text-align: center; margin-top: 12px; padding-top: 8px; border-top: 1px dashed #333; font-size: 9px; color: #666;">
-                <div style="font-weight: bold; margin: 0 0 2px 0;">Thank you for choosing our hospital</div>
-                <div style="margin: 0 0 1px 0;">We value your health and time</div>
-                <div style="font-size: 8px; margin: 4px 0 0 0; color: #999;">Generated on: <span id="generatedDateTime"></span></div>
-            </div>
-            
-            <!-- Barcode Section (Optional) -->
-            <div style="text-align: center; margin: 8px 0; padding: 4px; border: 1px solid #ddd; border-radius: 4px;">
-                <div style="font-size: 8px; color: #666; margin: 0 0 2px 0;">SCAN ME</div>
-                <div style="font-family: monospace; font-size: 8px; font-weight: bold; letter-spacing: -1px;" id="barcodeText"></div>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Alternative Compact Template for Small Printers -->
-    <div id="compactTokenTemplate" style="display: none;">
-        <div style="width: 280px; padding: 0; margin: 0; font-family: 'Courier New', monospace; font-size: 10px; line-height: 1.1; background: white;">
-            <!-- Header -->
-            <div style="text-align: center; padding: 4px 0; border-bottom: 1px solid #333; margin-bottom: 4px;">
-                <div style="font-size: 12px; font-weight: bold; margin: 0;">HOSPITAL SYSTEM</div>
-                <div style="font-size: 8px; margin: 0;">123 Medical St, Lahore</div>
-            </div>
-            
-            <!-- Token Info -->
-            <div style="text-align: center; margin: 4px 0;">
-                <div style="font-size: 14px; font-weight: bold;" id="compactTokenNo"></div>
-                <div style="font-size: 8px;"><span id="compactDate"></span> <span id="compactTime"></span></div>
-            </div>
-            
-            <!-- Details -->
-            <div style="margin: 4px 0; padding: 4px; border: 1px solid #ddd;">
-                <div style="font-size: 9px; font-weight: bold; text-align: center; margin-bottom: 2px;" id="compactType"></div>
-                <div style="font-size: 8px; margin: 1px 0;"><b>Patient:</b> <span id="compactPatientName"></span></div>
-                <div style="font-size: 8px; margin: 1px 0;"><b>ID:</b> <span id="compactPatientId"></span></div>
-                <div style="font-size: 8px; margin: 1px 0;"><b>Assigned:</b> <span id="compactAssignedTo"></span></div>
-            </div>
-            
-            <!-- Footer -->
-            <div style="text-align: center; margin-top: 4px; padding-top: 4px; border-top: 1px dashed #333; font-size: 8px;">
-                Please wait for your turn
+            <div class="mt-4 flex justify-end space-x-3">
+                <button onclick="window.print()" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
+                    <i class="fas fa-print mr-2"></i>Print
+                </button>
+                <button onclick="closePrintPreview()" class="bg-gray-600 text-white px-4 py-2 rounded hover:bg-gray-700">
+                    <i class="fas fa-times mr-2"></i>Close
+                </button>
             </div>
         </div>
     </div>
@@ -900,62 +923,15 @@ $pending_stats = $pending_stats_result->fetch_assoc();
             if (this.value === 'doctor') {
                 doctorDropdown.style.display = 'block';
                 testDropdown.style.display = 'none';
-                // Remove required attribute from test dropdown
                 document.getElementById('test_id').removeAttribute('required');
             } else if (this.value === 'lab') {
                 doctorDropdown.style.display = 'none';
                 testDropdown.style.display = 'block';
-                // Add required attribute to test dropdown
                 document.getElementById('test_id').setAttribute('required', 'required');
             } else {
                 doctorDropdown.style.display = 'none';
                 testDropdown.style.display = 'none';
                 document.getElementById('test_id').removeAttribute('required');
-            }
-        });
-        
-        // Check for existing doctor tokens when patient is selected
-        document.getElementById('patient_id').addEventListener('change', function() {
-            const patientId = this.value;
-            const tokenType = document.getElementById('token_type').value;
-            
-            if (patientId && tokenType === 'doctor') {
-                // Check if patient already has a waiting doctor token
-                fetch(`check_patient_doctor_token.php?patient_id=${patientId}`)
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.hasToken) {
-                            // Show warning but don't prevent form submission
-                            const warningDiv = document.createElement('div');
-                            warningDiv.className = 'bg-yellow-100 border border-yellow-400 text-yellow-700 px-4 py-3 rounded-lg mb-4';
-                            warningDiv.innerHTML = `
-                                <div class="flex items-center">
-                                    <i class="fas fa-exclamation-triangle mr-2"></i>
-                                    Patient already has a waiting doctor token (${data.tokenNo}). 
-                                    Please complete or cancel the existing token first.
-                                </div>
-                            `;
-                            
-                            // Remove any existing warning
-                            const existingWarning = document.querySelector('.bg-yellow-100');
-                            if (existingWarning) {
-                                existingWarning.remove();
-                            }
-                            
-                            // Insert warning after the form
-                            const form = document.getElementById('tokenForm');
-                            form.parentNode.insertBefore(warningDiv, form.nextSibling);
-                        } else {
-                            // Remove any existing warning
-                            const existingWarning = document.querySelector('.bg-yellow-100');
-                            if (existingWarning) {
-                                existingWarning.remove();
-                            }
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error:', error);
-                    });
             }
         });
         
@@ -981,28 +957,34 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                 }
             }
             
-            document.getElementById('editTokenModal').classList.remove('hidden');
+            document.getElementById('editTokenModal').style.display = 'block';
         }
         
         // Close edit modal
         function closeEditModal() {
-            document.getElementById('editTokenModal').classList.add('hidden');
+            document.getElementById('editTokenModal').style.display = 'none';
         }
         
         // Confirm refund
         function confirmRefund(tokenId) {
             document.getElementById('refund_token_id').value = tokenId;
-            document.getElementById('refundModal').classList.remove('hidden');
+            document.getElementById('refundModal').style.display = 'block';
         }
         
         // Close refund modal
         function closeRefundModal() {
-            document.getElementById('refundModal').classList.add('hidden');
+            document.getElementById('refundModal').style.display = 'none';
         }
         
-        // Enhanced print token function with professional template
-        function printToken(tokenNo, patientId, patientName, tokenType, assignedTo) {
-            // Get current date and time
+        // Close print preview
+        function closePrintPreview() {
+            document.getElementById('printPreviewModal').style.display = 'none';
+        }
+        
+        // Show print preview with thermal print styling
+        function showPrintPreview(tokenData) {
+            const data = typeof tokenData === 'string' ? JSON.parse(tokenData) : tokenData;
+            
             const currentDate = new Date().toLocaleDateString('en-US', {
                 year: 'numeric',
                 month: 'short',
@@ -1013,65 +995,69 @@ $pending_stats = $pending_stats_result->fetch_assoc();
                 minute: '2-digit',
                 hour12: true
             });
-            const tokenTypeFormatted = tokenType.charAt(0).toUpperCase() + tokenType.slice(1) + ' Token';
             
-            // Ask user which template to use
-            const useCompact = confirm('Use compact template for small thermal printers?\n\nClick OK for compact template\nClick Cancel for standard template');
+            const thermalHTML = `
+                <div style="text-align: center; padding: 8px 0; border-bottom: 2px solid #000; margin-bottom: 8px;">
+                    <div style="font-size: 14px; font-weight: bold; margin: 0; text-transform: uppercase;">LIFE CARE HOSPITAL</div>
+                    <div style="font-size: 9px; margin: 1px 0; font-weight: normal;">Sector A GT road, Haripur</div>
+                    <div style="font-size: 9px; margin: 1px 0; font-weight: normal;">Phone: (0995) 321234</div>
+                </div>
+                
+                <div style="text-align: center; margin: 6px 0; padding: 4px; background: #f0f0f0; border-radius: 4px;">
+                    <div style="font-size: 10px; font-weight: normal; margin: 0; color: #000;">TOKEN NUMBER</div>
+                    <div style="font-size: 18px; font-weight: bold; margin: 1px 0; color: #000; letter-spacing: 1px;">${data.token_no}</div>
+                    <div style="font-size: 9px; margin: 1px 0; color: #000;">
+                        ${currentDate} | ${currentTime}
+                    </div>
+                </div>
+                
+                <div style="text-align: center; margin: 6px 0; padding: 4px; background: #e8f5e8; border-radius: 4px;">
+                    <div style="font-size: 10px; font-weight: bold; margin: 0 0 1px 0; color: #000;">BILL INFORMATION</div>
+                    <div style="font-size: 10px; font-weight: bold; margin: 1px 0; color: #000;">Bill ID: ${data.bill_id || 'N/A'}</div>
+                    <div style="font-size: 10px; font-weight: bold; margin: 1px 0; color: #000;">Amount: PKR ${parseFloat(data.amount).toFixed(2)}</div>
+                    <div style="font-size: 10px; font-weight: bold; margin: 1px 0; color: #000;">Status: PAID</div>
+                </div>
+                
+                <div style="margin: 8px 0; padding: 4px; border-left: 4px solid #000; background: #f8f9fa;">
+                    <div style="font-size: 10px; font-weight: bold; margin: 0 0 1px 0; color: #000;">TOKEN TYPE</div>
+                    <div style="font-size: 12px; font-weight: bold; margin: 0 0 1px 0; color: #000; text-transform: uppercase;">${data.token_type.charAt(0).toUpperCase() + data.token_type.slice(1)} Token</div>
+                    <div style="font-size: 9px; margin: 1px 0; color: #000;">ASSIGNED TO:</div>
+                    <div style="font-size: 10px; font-weight: bold; margin: 0; color: #000;">${data.assigned_to}</div>
+                </div>
+                
+                <div style="margin: 8px 0; padding: 6px; border: 1px solid #ddd; border-radius: 4px;">
+                    <div style="font-size: 10px; font-weight: bold; margin: 0 0 4px 0; text-align: center; text-transform: uppercase; color: #000; border-bottom: 1px solid #ddd; padding-bottom: 2px;">Patient Information</div>
+                    <div style="display: flex; justify-content: space-between; margin: 2px 0;">
+                        <span style="font-weight: bold; color: #000;">ID:</span>
+                        <span style="font-weight: bold; color: #000;">${data.patient_id}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; margin: 2px 0;">
+                        <span style="font-weight: bold; color: #000;">Name:</span>
+                        <span style="font-weight: bold; color: #000; max-width: 150px; text-align: right;">${data.patient_name}</span>
+                    </div>
+                </div>
+                
+                <div style="margin: 8px 0; padding: 4px; background: #f0f8ff; border-radius: 4px;">
+                    <div style="font-size: 10px; font-weight: bold; margin: 0 0 1px 0; color: #000;">GENERATED BY</div>
+                    <div style="font-size: 10px; font-weight: bold; margin: 0; color: #000;">${data.generated_by}</div>
+                </div>
+                
+                <div style="margin: 10px 0; padding: 6px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 4px; text-align: center;">
+                    <div style="font-size: 10px; font-weight: bold; margin: 0 0 3px 0; color: #000;">⚠️ IMPORTANT INSTRUCTIONS</div>
+                    <div style="font-size: 8px; margin: 1px 0; color: #000;">• Please wait for your turn to be called</div>
+                    <div style="font-size: 8px; margin: 1px 0; color: #000;">• Keep this token safe for verification</div>
+                    <div style="font-size: 8px; margin: 1px 0; color: #000;">• Present this token when called</div>
+                </div>
+                
+                <div style="text-align: center; margin-top: 10px; padding-top: 6px; border-top: 1px dashed #000; font-size: 8px; color: #000;">
+                    <div style="font-weight: bold; margin: 0 0 1px 0;">Thank you for choosing Life Care Hospital</div>
+                    <div style="margin: 0 0 1px 0;">We value your health and time</div>
+                    <div style="font-size: 7px; margin: 3px 0 0 0; color: #666;">Generated on: ${new Date().toLocaleString()}</div>
+                </div>
+            `;
             
-            // Select template based on user choice
-            const templateId = useCompact ? 'compactTokenTemplate' : 'tokenTemplate';
-            const template = document.getElementById(templateId).innerHTML;
-            
-            // Create a new window for printing
-            const printWindow = window.open('', '_blank', 'width=400,height=600');
-            
-            // Create the complete HTML document
-            let printContent = '<!DOCTYPE html>';
-            printContent += '<html>';
-            printContent += '<head>';
-            printContent += '<title>Token - ' + tokenNo + '</title>';
-            printContent += '<style>';
-            printContent += 'body { margin: 0; padding: 0; font-family: monospace; background: white; }';
-            printContent += '@media print { body { margin: 0; padding: 0; } }';
-            printContent += '</style>';
-            printContent += '</head>';
-            printContent += '<body>';
-            printContent += template;
-            printContent += '<script>';
-            
-            if (useCompact) {
-                // Compact template population
-                printContent += 'document.getElementById("compactTokenNo").textContent = "' + tokenNo + '";';
-                printContent += 'document.getElementById("compactDate").textContent = "' + currentDate + '";';
-                printContent += 'document.getElementById("compactTime").textContent = "' + currentTime + '";';
-                printContent += 'document.getElementById("compactType").textContent = "' + tokenTypeFormatted + '";';
-                printContent += 'document.getElementById("compactPatientName").textContent = "' + patientName + '";';
-                printContent += 'document.getElementById("compactPatientId").textContent = "' + patientId + '";';
-                printContent += 'document.getElementById("compactAssignedTo").textContent = "' + assignedTo + '";';
-            } else {
-                // Standard template population
-                printContent += 'document.getElementById("printTokenNo").textContent = "' + tokenNo + '";';
-                printContent += 'document.getElementById("printDate").textContent = "' + currentDate + '";';
-                printContent += 'document.getElementById("printTime").textContent = "' + currentTime + '";';
-                printContent += 'document.getElementById("printType").textContent = "' + tokenTypeFormatted + '";';
-                printContent += 'document.getElementById("printAssignedTo").textContent = "' + assignedTo + '";';
-                printContent += 'document.getElementById("printPatientId").textContent = "' + patientId + '";';
-                printContent += 'document.getElementById("printPatientName").textContent = "' + patientName + '";';
-                printContent += 'document.getElementById("generatedDateTime").textContent = "' + new Date().toLocaleString() + '";';
-                printContent += 'document.getElementById("barcodeText").textContent = "' + tokenNo + '";';
-            }
-            
-            printContent += 'window.onload = function() { ';
-            printContent += 'window.print(); ';
-            printContent += 'setTimeout(function() { window.close(); }, 2000); ';
-            printContent += '};';
-            printContent += '<\/script>';
-            printContent += '</body>';
-            printContent += '</html>';
-            
-            // Write the content to the new window
-            printWindow.document.write(printContent);
-            printWindow.document.close();
+            document.getElementById('thermalContent').innerHTML = thermalHTML;
+            document.getElementById('printPreviewModal').style.display = 'block';
         }
         
         // Form validation
@@ -1090,6 +1076,23 @@ $pending_stats = $pending_stats_result->fetch_assoc();
         window.addEventListener('load', function() {
             document.getElementById('patient_id').focus();
         });
+        
+        // Close modals when clicking outside
+        window.onclick = function(event) {
+            const editModal = document.getElementById('editTokenModal');
+            const refundModal = document.getElementById('refundModal');
+            const printModal = document.getElementById('printPreviewModal');
+            
+            if (event.target === editModal) {
+                editModal.style.display = 'none';
+            }
+            if (event.target === refundModal) {
+                refundModal.style.display = 'none';
+            }
+            if (event.target === printModal) {
+                printModal.style.display = 'none';
+            }
+        }
     </script>
 </body>
-</html>  
+</html>
